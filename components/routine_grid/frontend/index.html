@@ -58,12 +58,8 @@
     color: #8a8368;
     margin-top: 2px;
   }
-  td.break-row {
-    background: #EAE4D6;
-    color: #8a8368;
-    font-style: italic;
-    font-size: 12px;
-    letter-spacing: 0.03em;
+  td.break-label {
+    border-left: 3px solid var(--gold) !important;
   }
   .cell-empty {
     cursor: pointer;
@@ -73,6 +69,16 @@
     transition: background 0.12s ease;
   }
   .cell-empty:hover { background: var(--paper); color: var(--gold); }
+  .cell-break {
+    background: #EAE4D6;
+    cursor: pointer;
+    color: #8a8368;
+    font-style: italic;
+    font-size: 11px;
+    padding: 10px 4px;
+    transition: background 0.12s ease;
+  }
+  .cell-break:hover { background: #E0D9C8; color: var(--gold); }
   .cell-filled {
     background: var(--sage-soft);
     border-left: 3px solid var(--sage);
@@ -101,6 +107,13 @@
     opacity: 0.55;
   }
   .clear-btn:hover { opacity: 1; }
+  .span-badge { font-size: 9px; color: var(--ink-soft); margin-top: 3px; font-style: italic; }
+  .assign-form { padding: 4px; }
+  .assign-form select { margin-bottom: 4px; }
+  .span-row { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; font-size: 10px; color: var(--ink-soft); }
+  .span-row select { width: auto; min-width: 44px; }
+  .cancel-link { font-size: 10px; color: var(--terracotta); cursor: pointer; margin-top: 2px; text-align: center; }
+  .cancel-link:hover { text-decoration: underline; }
   select {
     width: 100%;
     padding: 6px 4px;
@@ -138,40 +151,110 @@ function setComponentValue(value) {
   postToStreamlit("streamlit:setComponentValue", { value: value });
 }
 
-function Cell({ day, slot, entry, subjects, isOpen, onOpen, onClose, onAssign, onClear }) {
+/* ── Merge detection ── */
+function computeMerges(days, slots, assignments) {
+  const spanMap = {};   // key -> N  (first cell of a group, N >= 2)
+  const skipSet = {};   // key -> true  (swallowed cells)
+  for (const day of days) {
+    let i = 0;
+    while (i < slots.length) {
+      const key = day + "|" + slots[i].id;
+      const entry = assignments[key];
+      if (entry) {
+        let span = 1;
+        while (i + span < slots.length) {
+          const nk = day + "|" + slots[i + span].id;
+          const ne = assignments[nk];
+          if (ne && ne.subject_id === entry.subject_id) { span++; } else { break; }
+        }
+        if (span > 1) {
+          spanMap[key] = span;
+          for (let j = 1; j < span; j++) skipSet[day + "|" + slots[i + j].id] = true;
+        }
+        i += span;
+      } else {
+        i++;
+      }
+    }
+  }
+  return { spanMap, skipSet };
+}
+
+function maxEmptySpan(day, slotIdx, slots, assignments) {
+  let n = 0;
+  for (let i = slotIdx; i < slots.length; i++) {
+    if (assignments[day + "|" + slots[i].id]) break;
+    n++;
+  }
+  return Math.max(n, 1);
+}
+
+/* ── Cell component ── */
+function Cell({ day, slot, entry, subjects, isOpen, onOpen, onClose, onAssign, onClear, rowSpan, isBreak, maxSpan }) {
+  /* Filled */
   if (entry) {
+    const rs = rowSpan || 1;
     return html`
-      <td>
+      <td rowSpan=${rs}>
         <div class="cell-filled">
-          <span class="clear-btn" title="Remove" onClick=${() => onClear(day, slot.id)}>×</span>
+          <span class="clear-btn" title="Remove" onClick=${() => onClear(day, slot.id, rs)}>×</span>
           <div class="subj-code">${entry.subject_code}</div>
           <div class="subj-name">${entry.subject_name}</div>
           <div class="subj-teacher">${entry.teacher_name || "No teacher assigned"}</div>
+          ${rs > 1 ? html`<div class="span-badge">${rs} periods</div>` : null}
         </div>
       </td>
     `;
   }
-  const available = subjects.filter((s) => s.assigned_count < s.credit);
+
+  /* Open (assign form) */
   if (isOpen) {
+    const ms = maxSpan || 1;
     return html`
       <td>
-        <select
-          autoFocus
-          onBlur=${() => onClose()}
-          onChange=${(ev) => {
-            const val = ev.target.value;
-            if (val) onAssign(day, slot.id, parseInt(val, 10));
-            else onClose();
-          }}
-        >
-          <option value="">— choose subject —</option>
-          ${available.map(
-            (s) => html`<option key=${s.id} value=${s.id}>${s.code} · ${s.assigned_count}/${s.credit} used</option>`
-          )}
-        </select>
+        <div class="assign-form">
+          ${ms > 1 ? html`
+            <div class="span-row">
+              <span>Periods:</span>
+              <select class="span-sel">
+                ${Array.from({length: ms}, (_, i) => i + 1).map(n =>
+                  html`<option key=${n} value=${n}>${n}</option>`
+                )}
+              </select>
+            </div>
+          ` : null}
+          <select
+            autoFocus
+            onChange=${(ev) => {
+              const val = ev.target.value;
+              if (val) {
+                const spanEl = ev.target.parentElement.querySelector('.span-sel');
+                const span = spanEl ? parseInt(spanEl.value, 10) : 1;
+                onAssign(day, slot.id, parseInt(val, 10), span);
+              }
+            }}
+          >
+            <option value="">— choose subject —</option>
+            ${subjects.map(
+              (s) => html`<option key=${s.id} value=${s.id}>${s.code} · ${s.assigned_count}/${s.credit} used</option>`
+            )}
+          </select>
+          <div class="cancel-link" onClick=${(ev) => { ev.stopPropagation(); onClose(); }}>cancel</div>
+        </div>
       </td>
     `;
   }
+
+  /* Empty break cell */
+  if (isBreak) {
+    return html`
+      <td>
+        <div class="cell-break" onClick=${() => onOpen(day, slot.id)}>${slot.label}</div>
+      </td>
+    `;
+  }
+
+  /* Empty regular cell */
   return html`
     <td>
       <div class="cell-empty" onClick=${() => onOpen(day, slot.id)}>+</div>
@@ -179,24 +262,25 @@ function Cell({ day, slot, entry, subjects, isOpen, onOpen, onClose, onAssign, o
   `;
 }
 
+/* ── App ── */
 function App({ args }) {
   const { days = [], slots = [], assignments = {}, subjects = [] } = args || {};
   const [openCell, setOpenCell] = React.useState(null);
 
-  React.useEffect(() => {
-    reportHeight();
-  });
+  React.useEffect(() => { reportHeight(); });
 
   if (!slots.length) {
     return html`<div class="empty-note">No time slots defined yet. Add periods on the "Time Slots" page first.</div>`;
   }
 
-  function handleAssign(day, slotId, subjectId) {
+  const { spanMap, skipSet } = computeMerges(days, slots, assignments);
+
+  function handleAssign(day, slotId, subjectId, span) {
     setOpenCell(null);
-    setComponentValue({ action: "assign", day, slot_id: slotId, subject_id: subjectId, nonce: Date.now() + Math.random() });
+    setComponentValue({ action: "assign", day, slot_id: slotId, subject_id: subjectId, span: span || 1, nonce: Date.now() + Math.random() });
   }
-  function handleClear(day, slotId) {
-    setComponentValue({ action: "clear", day, slot_id: slotId, nonce: Date.now() + Math.random() });
+  function handleClear(day, slotId, span) {
+    setComponentValue({ action: "clear", day, slot_id: slotId, span: span || 1, nonce: Date.now() + Math.random() });
   }
 
   return html`
@@ -208,42 +292,39 @@ function App({ args }) {
         </tr>
       </thead>
       <tbody>
-        ${slots.map((slot) => {
-          if (slot.is_break) {
-            return html`
-              <tr key=${slot.id}>
-                <td class="slotlabel">${slot.label}<span class="time">${slot.start_time}–${slot.end_time}</span></td>
-                <td class="break-row" colspan=${days.length}>${slot.label}</td>
-              </tr>
-            `;
-          }
-          return html`
-            <tr key=${slot.id}>
-              <td class="slotlabel">${slot.label}<span class="time">${slot.start_time}–${slot.end_time}</span></td>
-              ${days.map((day) => {
-                const key = day + "|" + slot.id;
-                const entry = assignments[key];
-                return html`<${Cell}
-                  key=${key}
-                  day=${day}
-                  slot=${slot}
-                  entry=${entry}
-                  subjects=${subjects}
-                  isOpen=${openCell === key}
-                  onOpen=${(d, s) => setOpenCell(d + "|" + s)}
-                  onClose=${() => setOpenCell(null)}
-                  onAssign=${handleAssign}
-                  onClear=${handleClear}
-                />`;
-              })}
-            </tr>
-          `;
-        })}
+        ${slots.map((slot, si) => html`
+          <tr key=${slot.id}>
+            <td class=${`slotlabel${slot.is_break ? ' break-label' : ''}`}>${slot.label}<span class="time">${slot.start_time}–${slot.end_time}</span></td>
+            ${days.map((day) => {
+              const key = day + "|" + slot.id;
+              if (skipSet[key]) return null;
+              const entry = assignments[key];
+              const rs = spanMap[key];
+              const ms = maxEmptySpan(day, si, slots, assignments);
+              return html`<${Cell}
+                key=${key}
+                day=${day}
+                slot=${slot}
+                entry=${entry}
+                subjects=${subjects}
+                isOpen=${openCell === key}
+                onOpen=${(d, s) => setOpenCell(d + "|" + s)}
+                onClose=${() => setOpenCell(null)}
+                onAssign=${handleAssign}
+                onClear=${handleClear}
+                rowSpan=${rs}
+                isBreak=${slot.is_break}
+                maxSpan=${ms}
+              />`;
+            })}
+          </tr>
+        `)}
       </tbody>
     </table>
   `;
 }
 
+/* ── Streamlit render loop ── */
 function render(args) {
   ReactDOM.render(e(App, { args: args }), document.getElementById("root"));
   setTimeout(reportHeight, 30);

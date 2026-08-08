@@ -1,7 +1,8 @@
 """
 export_excel.py
 Builds a downloadable .xlsx workbook of the routine grid(s) using openpyxl.
-Empty slots are simply left blank, exactly as they appear on screen.
+Supports per-semester time slots, merged (multi-period) assignments, and
+break slots that may have assignments.
 """
 
 import io
@@ -28,18 +29,50 @@ def _sheet_name(program, semester):
     return name[:31]  # Excel sheet name limit
 
 
+def _compute_merge_map(slots, assignments):
+    """Build a dict  ``'day|slot_id' -> span (int)``  for merged cells.
+
+    -  ``span > 1``  means the cell is the top of a vertically-merged group.
+    - ``span == -1`` means the cell is hidden (swallowed by the merge above).
+    """
+    merge_map = {}
+    for day in db.DAYS:
+        i = 0
+        while i < len(slots):
+            key = f"{day}|{slots[i]['id']}"
+            entry = assignments.get(key)
+            if entry:
+                span = 1
+                while i + span < len(slots):
+                    next_key = f"{day}|{slots[i + span]['id']}"
+                    next_entry = assignments.get(next_key)
+                    if next_entry and next_entry.get("subject_id") == entry.get("subject_id"):
+                        span += 1
+                    else:
+                        break
+                if span > 1:
+                    merge_map[key] = span
+                    for j in range(1, span):
+                        merge_map[f"{day}|{slots[i + j]['id']}"] = -1
+                i += span
+            else:
+                i += 1
+    return merge_map
+
+
 def build_workbook(program_semesters):
     """program_semesters: list of (program, semester) tuples to include, one sheet each."""
     wb = Workbook()
     wb.remove(wb.active)
 
-    slots = db.list_time_slots()
-    if not slots:
-        slots = []
-
     for program, semester in program_semesters:
+        slots = db.list_time_slots(program, semester)
+        if not slots:
+            slots = []
+
         ws = wb.create_sheet(_sheet_name(program, semester))
         assignments = db.get_assignments(program, semester)
+        merge_map = _compute_merge_map(slots, assignments)
 
         # Title row
         ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(db.DAYS) + 1)
@@ -72,7 +105,12 @@ def build_workbook(program_semesters):
             tc.border = BORDER
             tc.fill = PatternFill("solid", fgColor=CREAM)
 
-            if slot["is_break"]:
+            # A "pure break" row = break slot with NO assignments on any day.
+            is_pure_break = slot["is_break"] and all(
+                f"{day}|{slot['id']}" not in assignments for day in db.DAYS
+            )
+
+            if is_pure_break:
                 ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=len(db.DAYS) + 1)
                 bc = ws.cell(row=r, column=2, value=slot["label"])
                 bc.font = Font(italic=True, color="6B6350")
@@ -82,10 +120,23 @@ def build_workbook(program_semesters):
             else:
                 for ci, day in enumerate(db.DAYS, start=2):
                     key = f"{day}|{slot['id']}"
+                    m = merge_map.get(key)
                     entry = assignments.get(key)
                     cell = ws.cell(row=r, column=ci)
                     cell.border = BORDER
                     cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+                    if m == -1:
+                        # Swallowed by a merge above — leave blank (openpyxl
+                        # already merged the cell range above).
+                        continue
+
+                    if m and m > 1:
+                        ws.merge_cells(
+                            start_row=r, start_column=ci,
+                            end_row=r + m - 1, end_column=ci,
+                        )
+
                     if entry:
                         cell.value = (
                             f"{entry['subject_code']}\n{entry['subject_name']}\n"
@@ -93,6 +144,10 @@ def build_workbook(program_semesters):
                         )
                         cell.font = Font(size=9, color=INK)
                         cell.fill = PatternFill("solid", fgColor="EFEBDD")
+                    elif slot["is_break"]:
+                        cell.value = slot["label"]
+                        cell.font = Font(italic=True, color="6B6350")
+                        cell.fill = PatternFill("solid", fgColor=BREAK_FILL)
                     else:
                         cell.value = ""
             r += 1

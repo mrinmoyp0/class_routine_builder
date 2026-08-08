@@ -193,15 +193,21 @@ def page_subjects():
 
 
 # ---------------------------------------------------------------------------
-# Time slots
+# Time slots (per program + semester)
 # ---------------------------------------------------------------------------
 def page_time_slots():
     st.title("Time Slots")
-    st.markdown('<p class="ledger-note">This period grid is shared across all programs and semesters.</p>', unsafe_allow_html=True)
+    st.markdown('<p class="ledger-note">Configure the period grid independently for each program and semester.</p>', unsafe_allow_html=True)
+
+    c1, c2 = st.columns(2)
+    program = c1.selectbox("Program", db.PROGRAMS, key="slot_program")
+    semester = int(c2.number_input("Semester", min_value=1, max_value=8, value=1, step=1, key="slot_semester"))
+
+    db.seed_default_slots(program, semester)
 
     with st.form("add_slot_form", clear_on_submit=True):
         c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
-        label = c1.text_input("Label", placeholder="e.g. Period 7")
+        label = c1.text_input("Label", placeholder="e.g. Period 9")
         start_time = c2.text_input("Start", placeholder="3:15 PM")
         end_time = c3.text_input("End", placeholder="4:10 PM")
         is_break = c4.checkbox("Break?")
@@ -210,16 +216,16 @@ def page_time_slots():
             if not label.strip() or not start_time.strip() or not end_time.strip():
                 st.error("Fill in label, start time, and end time.")
             else:
-                db.add_time_slot(label, start_time, end_time, is_break)
+                db.add_time_slot(program, semester, label, start_time, end_time, is_break)
                 st.success(f"Added {label}.")
                 st.rerun()
 
-    slots = db.list_time_slots()
-    st.subheader(f"Weekly periods ({len(slots)})")
+    slots = db.list_time_slots(program, semester)
+    st.subheader(f"{program} · Semester {semester} — {len(slots)} period(s)")
     if not slots:
         st.info("No periods defined yet.")
     for i, s in enumerate(slots):
-        c1, c2, c3, c4, c5, c6 = st.columns([3, 2, 1, 1, 1, 1])
+        c1, c2, c3, c4, c5, c6 = st.columns([3, 2, 0.6, 0.6, 0.8, 1])
         c1.write(("🔸 " if s["is_break"] else "▪️ ") + s["label"])
         c2.write(f"{s['start_time']} – {s['end_time']}")
         if c3.button("↑", key=f"up_{s['id']}", disabled=(i == 0)):
@@ -227,6 +233,10 @@ def page_time_slots():
             st.rerun()
         if c4.button("↓", key=f"down_{s['id']}", disabled=(i == len(slots) - 1)):
             db.move_time_slot(s["id"], 1)
+            st.rerun()
+        brk_label = "▪️ Class" if s["is_break"] else "🔸 Break"
+        if c5.button(brk_label, key=f"brk_{s['id']}"):
+            db.toggle_break(s["id"])
             st.rerun()
         if c6.button("Remove", key=f"del_slot_{s['id']}"):
             db.delete_time_slot(s["id"])
@@ -253,7 +263,7 @@ def page_build_routine():
         st.warning("No subjects defined for this program and semester yet. Add some on the Subjects page first.")
         return
 
-    slots_rows = db.list_time_slots()
+    slots_rows = db.list_time_slots(program, semester)
     if not slots_rows:
         st.warning("No time slots defined yet. Add some on the Time Slots page first.")
         return
@@ -284,7 +294,7 @@ def page_build_routine():
 
     assignments_payload = db.get_assignments(program, semester)
 
-    st.markdown('<p class="ledger-note">Click an empty cell to assign a subject. Click the × on a filled cell to clear it. Blank cells stay blank.</p>', unsafe_allow_html=True)
+    st.markdown('<p class="ledger-note">Click an empty cell to assign a subject (pick multiple periods to merge). Click × to clear. Break slots are assignable too.</p>', unsafe_allow_html=True)
 
     action = routine_grid(
         days=db.DAYS,
@@ -299,16 +309,19 @@ def page_build_routine():
         if st.session_state.get(nonce_key) != action.get("nonce"):
             st.session_state[nonce_key] = action.get("nonce")
             if action["action"] == "assign":
-                ok, text = db.assign_slot(program, semester, action["day"], action["slot_id"], action["subject_id"])
+                span = int(action.get("span", 1))
+                ok, text = db.assign_slot(program, semester, action["day"], action["slot_id"], action["subject_id"], span)
                 st.session_state[msg_key] = ("success" if ok else "error", text)
             elif action["action"] == "clear":
-                db.clear_slot(program, semester, action["day"], action["slot_id"])
+                span = int(action.get("span", 1))
+                db.clear_slot(program, semester, action["day"], action["slot_id"], span)
                 st.session_state[msg_key] = ("success", "Slot cleared.")
             st.rerun()
 
     st.subheader("Credit progress")
     for s in subjects_payload:
-        st.markdown(f"`{credit_bar(s['assigned_count'], s['credit'])}`  **{s['code']}** — {s['assigned_count']}/{s['credit']} classes placed")
+        status = "⚠️ over" if s['assigned_count'] > s['credit'] else ""
+        st.markdown(f"`{credit_bar(s['assigned_count'], s['credit'])}`  **{s['code']}** — {s['assigned_count']}/{s['credit']} classes placed {status}")
 
 
 # ---------------------------------------------------------------------------
