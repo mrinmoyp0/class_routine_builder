@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8" />
+<style>
+  :root {
+    --ink: #1F2A44;
+    --ink-soft: #4B5568;
+    --gold: #B8863B;
+    --cream: #FAF7F0;
+    --paper: #F3EEE1;
+    --rule: #D9D2BE;
+    --sage: #5C8374;
+    --sage-soft: #E4ECE7;
+    --terracotta: #B7472A;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: transparent;
+    font-family: "IBM Plex Sans", "Segoe UI", Arial, sans-serif;
+    color: var(--ink);
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    background: var(--cream);
+  }
+  th, td {
+    border: 1px solid var(--rule);
+    padding: 0;
+    text-align: center;
+    vertical-align: middle;
+  }
+  th {
+    background: var(--ink);
+    color: var(--cream);
+    font-weight: 600;
+    font-size: 12.5px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 10px 4px;
+  }
+  th.time-header { background: var(--ink); }
+  td.slotlabel {
+    background: var(--paper);
+    font-family: "IBM Plex Mono", "Courier New", monospace;
+    font-weight: 600;
+    font-size: 11px;
+    color: var(--ink-soft);
+    white-space: nowrap;
+    padding: 8px 6px;
+    min-width: 92px;
+  }
+  td.slotlabel .time {
+    display: block;
+    font-weight: 400;
+    color: #8a8368;
+    margin-top: 2px;
+  }
+  td.break-row {
+    background: #EAE4D6;
+    color: #8a8368;
+    font-style: italic;
+    font-size: 12px;
+    letter-spacing: 0.03em;
+  }
+  .cell-empty {
+    cursor: pointer;
+    color: #b3ac95;
+    font-size: 18px;
+    padding: 14px 4px;
+    transition: background 0.12s ease;
+  }
+  .cell-empty:hover { background: var(--paper); color: var(--gold); }
+  .cell-filled {
+    background: var(--sage-soft);
+    border-left: 3px solid var(--sage);
+    padding: 6px 8px 6px 6px;
+    position: relative;
+    text-align: left;
+    min-height: 48px;
+  }
+  .subj-code {
+    font-family: "IBM Plex Mono", monospace;
+    font-weight: 700;
+    font-size: 12px;
+    color: var(--sage);
+  }
+  .subj-name { font-size: 11px; color: var(--ink); margin-top: 1px; line-height: 1.2; }
+  .subj-teacher { font-size: 10px; color: var(--ink-soft); margin-top: 2px; }
+  .clear-btn {
+    position: absolute;
+    top: 3px;
+    right: 5px;
+    cursor: pointer;
+    color: var(--terracotta);
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+    opacity: 0.55;
+  }
+  .clear-btn:hover { opacity: 1; }
+  select {
+    width: 100%;
+    padding: 6px 4px;
+    border-radius: 0;
+    background: #fff;
+    color: var(--ink);
+    border: 1px solid var(--gold);
+    font-size: 11px;
+  }
+  .empty-note {
+    font-size: 11px;
+    color: #8a8368;
+    padding: 10px;
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/htm@3.1.1/dist/htm.umd.js"></script>
+<script>
+const html = htm.bind(React.createElement);
+const e = React.createElement;
+
+function postToStreamlit(type, extra) {
+  window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type: type }, extra || {}), "*");
+}
+function reportHeight() {
+  const h = document.documentElement.scrollHeight;
+  postToStreamlit("streamlit:setFrameHeight", { height: h + 12 });
+}
+function setComponentValue(value) {
+  postToStreamlit("streamlit:setComponentValue", { value: value });
+}
+
+function Cell({ day, slot, entry, subjects, isOpen, onOpen, onClose, onAssign, onClear }) {
+  if (entry) {
+    return html`
+      <td>
+        <div class="cell-filled">
+          <span class="clear-btn" title="Remove" onClick=${() => onClear(day, slot.id)}>×</span>
+          <div class="subj-code">${entry.subject_code}</div>
+          <div class="subj-name">${entry.subject_name}</div>
+          <div class="subj-teacher">${entry.teacher_name || "No teacher assigned"}</div>
+        </div>
+      </td>
+    `;
+  }
+  const available = subjects.filter((s) => s.assigned_count < s.credit);
+  if (isOpen) {
+    return html`
+      <td>
+        <select
+          autoFocus
+          onBlur=${() => onClose()}
+          onChange=${(ev) => {
+            const val = ev.target.value;
+            if (val) onAssign(day, slot.id, parseInt(val, 10));
+            else onClose();
+          }}
+        >
+          <option value="">— choose subject —</option>
+          ${available.map(
+            (s) => html`<option key=${s.id} value=${s.id}>${s.code} · ${s.assigned_count}/${s.credit} used</option>`
+          )}
+        </select>
+      </td>
+    `;
+  }
+  return html`
+    <td>
+      <div class="cell-empty" onClick=${() => onOpen(day, slot.id)}>+</div>
+    </td>
+  `;
+}
+
+function App({ args }) {
+  const { days = [], slots = [], assignments = {}, subjects = [] } = args || {};
+  const [openCell, setOpenCell] = React.useState(null);
+
+  React.useEffect(() => {
+    reportHeight();
+  });
+
+  if (!slots.length) {
+    return html`<div class="empty-note">No time slots defined yet. Add periods on the "Time Slots" page first.</div>`;
+  }
+
+  function handleAssign(day, slotId, subjectId) {
+    setOpenCell(null);
+    setComponentValue({ action: "assign", day, slot_id: slotId, subject_id: subjectId, nonce: Date.now() + Math.random() });
+  }
+  function handleClear(day, slotId) {
+    setComponentValue({ action: "clear", day, slot_id: slotId, nonce: Date.now() + Math.random() });
+  }
+
+  return html`
+    <table>
+      <thead>
+        <tr>
+          <th class="time-header">Time</th>
+          ${days.map((d) => html`<th key=${d}>${d}</th>`)}
+        </tr>
+      </thead>
+      <tbody>
+        ${slots.map((slot) => {
+          if (slot.is_break) {
+            return html`
+              <tr key=${slot.id}>
+                <td class="slotlabel">${slot.label}<span class="time">${slot.start_time}–${slot.end_time}</span></td>
+                <td class="break-row" colspan=${days.length}>${slot.label}</td>
+              </tr>
+            `;
+          }
+          return html`
+            <tr key=${slot.id}>
+              <td class="slotlabel">${slot.label}<span class="time">${slot.start_time}–${slot.end_time}</span></td>
+              ${days.map((day) => {
+                const key = day + "|" + slot.id;
+                const entry = assignments[key];
+                return html`<${Cell}
+                  key=${key}
+                  day=${day}
+                  slot=${slot}
+                  entry=${entry}
+                  subjects=${subjects}
+                  isOpen=${openCell === key}
+                  onOpen=${(d, s) => setOpenCell(d + "|" + s)}
+                  onClose=${() => setOpenCell(null)}
+                  onAssign=${handleAssign}
+                  onClear=${handleClear}
+                />`;
+              })}
+            </tr>
+          `;
+        })}
+      </tbody>
+    </table>
+  `;
+}
+
+function render(args) {
+  ReactDOM.render(e(App, { args: args }), document.getElementById("root"));
+  setTimeout(reportHeight, 30);
+}
+
+window.addEventListener("message", (event) => {
+  const data = event.data;
+  if (!data || !data.type) return;
+  if (data.type === "streamlit:render") {
+    render(data.args);
+  }
+});
+
+postToStreamlit("streamlit:componentReady", { apiVersion: 1 });
+reportHeight();
+</script>
+</body>
+</html>
