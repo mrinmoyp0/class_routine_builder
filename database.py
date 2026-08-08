@@ -1,288 +1,351 @@
 """
 database.py
 Data layer for the Class Routine Builder.
-Everything (schema, CRUD, conflict/credit logic) lives here in plain Python + sqlite3
-so the app has a single source of truth that both the Streamlit pages and the
-embedded React grid component read from / write to.
+Uses MongoDB Atlas for persistent cloud storage so data survives app restarts.
+
+Collections (all inside the "Routine" database):
+  teachers, subjects, time_slots, assignments, counters
+
+Integer IDs are preserved via a "counters" collection so the rest of the
+codebase (app.py, export_excel.py, the React grid) keeps working unchanged.
 """
 
-import sqlite3
-import os
-from contextlib import contextmanager
+from pymongo import MongoClient, ReturnDocument
+from pymongo.errors import DuplicateKeyError
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "routine.db")
+MONGO_URI = (
+    "mongodb+srv://MongoDB:S5eEJADM1mh5zUzt@cluster0.sy74t.mongodb.net/"
+    "?retryWrites=true&w=majority&appName=Cluster0"
+)
+DB_NAME = "Routine"
 
 PROGRAMS = ["B.Tech Computer Science", "BSc Data Science", "BCA"]
 DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 
+# ---------------------------------------------------------------------------
+# Connection (single pooled client, created once at import time)
+# ---------------------------------------------------------------------------
+_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=10000)
+_db = _client[DB_NAME]
 
-@contextmanager
-def get_conn():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    try:
-        yield conn
-        conn.commit()
-    finally:
-        conn.close()
+_teachers = _db["teachers"]
+_subjects = _db["subjects"]
+_time_slots = _db["time_slots"]
+_assignments = _db["assignments"]
+_counters = _db["counters"]
 
+
+def _next_id(collection_name):
+    """Return the next auto-incrementing integer id for *collection_name*."""
+    doc = _counters.find_one_and_update(
+        {"_id": collection_name},
+        {"$inc": {"seq": 1}},
+        upsert=True,
+        return_document=ReturnDocument.AFTER,
+    )
+    return doc["seq"]
+
+
+# ---------------------------------------------------------------------------
+# Initialisation — indexes + default seed data
+# ---------------------------------------------------------------------------
 
 def init_db():
-    with get_conn() as conn:
-        conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS teachers (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                short_code TEXT
-            );
+    """Create indexes and seed default time slots if the collection is empty."""
+    _teachers.create_index("id", unique=True)
+    _teachers.create_index("name", unique=True)
 
-            CREATE TABLE IF NOT EXISTS subjects (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                program TEXT NOT NULL,
-                semester INTEGER NOT NULL,
-                name TEXT NOT NULL,
-                code TEXT NOT NULL,
-                credit INTEGER NOT NULL,
-                teacher_id INTEGER,
-                FOREIGN KEY (teacher_id) REFERENCES teachers(id) ON DELETE SET NULL,
-                UNIQUE(program, semester, code)
-            );
+    _subjects.create_index("id", unique=True)
+    _subjects.create_index(
+        [("program", 1), ("semester", 1), ("code", 1)], unique=True
+    )
 
-            CREATE TABLE IF NOT EXISTS time_slots (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                order_index INTEGER NOT NULL,
-                label TEXT NOT NULL,
-                start_time TEXT NOT NULL,
-                end_time TEXT NOT NULL,
-                is_break INTEGER NOT NULL DEFAULT 0
-            );
+    _time_slots.create_index("id", unique=True)
+    _time_slots.create_index("order_index")
 
-            CREATE TABLE IF NOT EXISTS assignments (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                program TEXT NOT NULL,
-                semester INTEGER NOT NULL,
-                day TEXT NOT NULL,
-                slot_id INTEGER NOT NULL,
-                subject_id INTEGER NOT NULL,
-                FOREIGN KEY (slot_id) REFERENCES time_slots(id) ON DELETE CASCADE,
-                FOREIGN KEY (subject_id) REFERENCES subjects(id) ON DELETE CASCADE,
-                UNIQUE(program, semester, day, slot_id)
-            );
-            """
-        )
-        # Seed a default set of periods on first run only.
-        count = conn.execute("SELECT COUNT(*) AS c FROM time_slots").fetchone()["c"]
-        if count == 0:
-            defaults = [
-                (1, "Period 1", "09:00", "09:55", 0),
-                (2, "Period 2", "09:55", "10:50", 0),
-                (3, "Period 3", "10:50", "11:45", 0),
-                (4, "Lunch Break", "11:45", "12:30", 1),
-                (5, "Period 4", "12:30", "13:25", 0),
-                (6, "Period 5", "13:25", "14:20", 0),
-                (7, "Period 6", "14:20", "15:15", 0),
-            ]
-            conn.executemany(
-                "INSERT INTO time_slots (order_index, label, start_time, end_time, is_break) VALUES (?,?,?,?,?)",
-                defaults,
+    _assignments.create_index("id", unique=True)
+    _assignments.create_index(
+        [("program", 1), ("semester", 1), ("day", 1), ("slot_id", 1)],
+        unique=True,
+    )
+
+    # Seed a default set of periods on first run only.
+    if _time_slots.count_documents({}) == 0:
+        defaults = [
+            (1, "Period 1", "09:00", "09:55", 0),
+            (2, "Period 2", "09:55", "10:50", 0),
+            (3, "Period 3", "10:50", "11:45", 0),
+            (4, "Lunch Break", "11:45", "12:30", 1),
+            (5, "Period 4", "12:30", "13:25", 0),
+            (6, "Period 5", "13:25", "14:20", 0),
+            (7, "Period 6", "14:20", "15:15", 0),
+        ]
+        for order_index, label, start_time, end_time, is_break in defaults:
+            _time_slots.insert_one(
+                {
+                    "id": _next_id("time_slots"),
+                    "order_index": order_index,
+                    "label": label,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "is_break": is_break,
+                }
             )
 
 
 # ---------- Teachers ----------
 
 def add_teacher(name, short_code=""):
-    with get_conn() as conn:
-        conn.execute(
-            "INSERT INTO teachers (name, short_code) VALUES (?, ?)",
-            (name.strip(), short_code.strip()),
-        )
+    _teachers.insert_one(
+        {
+            "id": _next_id("teachers"),
+            "name": name.strip(),
+            "short_code": short_code.strip(),
+        }
+    )
 
 
 def list_teachers():
-    with get_conn() as conn:
-        return conn.execute("SELECT * FROM teachers ORDER BY name").fetchall()
+    return list(_teachers.find({}, {"_id": 0}).sort("name", 1))
 
 
 def delete_teacher(teacher_id):
-    with get_conn() as conn:
-        conn.execute("DELETE FROM teachers WHERE id = ?", (teacher_id,))
+    _teachers.delete_one({"id": teacher_id})
+    # Replicate ON DELETE SET NULL: un-link this teacher from all subjects.
+    _subjects.update_many(
+        {"teacher_id": teacher_id}, {"$set": {"teacher_id": None}}
+    )
 
 
 # ---------- Subjects ----------
 
 def add_subject(program, semester, name, code, credit, teacher_id):
-    with get_conn() as conn:
-        conn.execute(
-            """INSERT INTO subjects (program, semester, name, code, credit, teacher_id)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (program, semester, name.strip(), code.strip(), credit, teacher_id),
-        )
+    _subjects.insert_one(
+        {
+            "id": _next_id("subjects"),
+            "program": program,
+            "semester": semester,
+            "name": name.strip(),
+            "code": code.strip(),
+            "credit": credit,
+            "teacher_id": teacher_id,
+        }
+    )
 
 
 def list_subjects(program=None, semester=None):
-    query = """
-        SELECT s.*, t.name AS teacher_name
-        FROM subjects s LEFT JOIN teachers t ON s.teacher_id = t.id
-    """
-    conditions, params = [], []
+    match = {}
     if program is not None:
-        conditions.append("s.program = ?")
-        params.append(program)
+        match["program"] = program
     if semester is not None:
-        conditions.append("s.semester = ?")
-        params.append(semester)
-    if conditions:
-        query += " WHERE " + " AND ".join(conditions)
-    query += " ORDER BY s.code"
-    with get_conn() as conn:
-        return conn.execute(query, params).fetchall()
+        match["semester"] = semester
+
+    pipeline = [
+        {"$match": match},
+        {
+            "$lookup": {
+                "from": "teachers",
+                "localField": "teacher_id",
+                "foreignField": "id",
+                "as": "_teacher",
+            }
+        },
+        {
+            "$addFields": {
+                "teacher_name": {
+                    "$ifNull": [{"$arrayElemAt": ["$_teacher.name", 0]}, None]
+                }
+            }
+        },
+        {"$project": {"_id": 0, "_teacher": 0}},
+        {"$sort": {"code": 1}},
+    ]
+    return list(_subjects.aggregate(pipeline))
 
 
 def delete_subject(subject_id):
-    with get_conn() as conn:
-        conn.execute("DELETE FROM subjects WHERE id = ?", (subject_id,))
+    _subjects.delete_one({"id": subject_id})
+    # Replicate ON DELETE CASCADE: remove all assignments for this subject.
+    _assignments.delete_many({"subject_id": subject_id})
 
 
 def assigned_count(subject_id):
-    with get_conn() as conn:
-        row = conn.execute(
-            "SELECT COUNT(*) AS c FROM assignments WHERE subject_id = ?", (subject_id,)
-        ).fetchone()
-        return row["c"]
+    return _assignments.count_documents({"subject_id": subject_id})
+
+
+def update_subject_teacher(subject_id, teacher_id):
+    """Assign or change the teacher for a subject (used when a teacher is
+    recruited after the subject was already created)."""
+    _subjects.update_one(
+        {"id": subject_id}, {"$set": {"teacher_id": teacher_id}}
+    )
 
 
 # ---------- Time slots ----------
 
 def list_time_slots():
-    with get_conn() as conn:
-        return conn.execute("SELECT * FROM time_slots ORDER BY order_index").fetchall()
+    return list(_time_slots.find({}, {"_id": 0}).sort("order_index", 1))
 
 
 def add_time_slot(label, start_time, end_time, is_break):
-    with get_conn() as conn:
-        max_order = conn.execute(
-            "SELECT COALESCE(MAX(order_index), 0) AS m FROM time_slots"
-        ).fetchone()["m"]
-        conn.execute(
-            "INSERT INTO time_slots (order_index, label, start_time, end_time, is_break) VALUES (?,?,?,?,?)",
-            (max_order + 1, label.strip(), start_time, end_time, int(is_break)),
-        )
+    last = _time_slots.find_one({}, sort=[("order_index", -1)])
+    max_order = last["order_index"] if last else 0
+    _time_slots.insert_one(
+        {
+            "id": _next_id("time_slots"),
+            "order_index": max_order + 1,
+            "label": label.strip(),
+            "start_time": start_time,
+            "end_time": end_time,
+            "is_break": int(is_break),
+        }
+    )
 
 
 def delete_time_slot(slot_id):
-    with get_conn() as conn:
-        conn.execute("DELETE FROM time_slots WHERE id = ?", (slot_id,))
+    _time_slots.delete_one({"id": slot_id})
+    # Replicate ON DELETE CASCADE: remove assignments that reference this slot.
+    _assignments.delete_many({"slot_id": slot_id})
 
 
 def move_time_slot(slot_id, direction):
-    """direction: -1 to move up, +1 to move down"""
-    with get_conn() as conn:
-        slots = conn.execute("SELECT * FROM time_slots ORDER BY order_index").fetchall()
-        ids = [s["id"] for s in slots]
-        idx = ids.index(slot_id)
-        swap_idx = idx + direction
-        if 0 <= swap_idx < len(ids):
-            a, b = slots[idx], slots[swap_idx]
-            conn.execute("UPDATE time_slots SET order_index = ? WHERE id = ?", (b["order_index"], a["id"]))
-            conn.execute("UPDATE time_slots SET order_index = ? WHERE id = ?", (a["order_index"], b["id"]))
+    """direction: -1 to move up, +1 to move down."""
+    slots = list(_time_slots.find({}, {"_id": 0}).sort("order_index", 1))
+    ids = [s["id"] for s in slots]
+    idx = ids.index(slot_id)
+    swap_idx = idx + direction
+    if 0 <= swap_idx < len(ids):
+        a, b = slots[idx], slots[swap_idx]
+        _time_slots.update_one(
+            {"id": a["id"]}, {"$set": {"order_index": b["order_index"]}}
+        )
+        _time_slots.update_one(
+            {"id": b["id"]}, {"$set": {"order_index": a["order_index"]}}
+        )
 
 
 # ---------- Assignments / routine building ----------
 
 def get_assignments(program, semester):
-    """Returns dict keyed 'day|slot_id' -> row with subject + teacher info, for one program+semester."""
-    with get_conn() as conn:
-        rows = conn.execute(
-            """
-            SELECT a.day, a.slot_id, a.subject_id, s.name AS subject_name, s.code AS subject_code,
-                   t.name AS teacher_name
-            FROM assignments a
-            JOIN subjects s ON a.subject_id = s.id
-            LEFT JOIN teachers t ON s.teacher_id = t.id
-            WHERE a.program = ? AND a.semester = ?
-            """,
-            (program, semester),
-        ).fetchall()
-    return {f"{r['day']}|{r['slot_id']}": dict(r) for r in rows}
-
-
-def find_teacher_conflict(teacher_id, day, slot_id, exclude_program=None, exclude_semester=None):
-    """Returns the conflicting assignment row (program/semester/subject) if this teacher
-    is already teaching some OTHER subject at this day+slot anywhere, else None."""
-    if teacher_id is None:
-        return None
-    with get_conn() as conn:
-        rows = conn.execute(
-            """
-            SELECT a.program, a.semester, s.code AS subject_code, s.name AS subject_name
-            FROM assignments a
-            JOIN subjects s ON a.subject_id = s.id
-            WHERE a.day = ? AND a.slot_id = ? AND s.teacher_id = ?
-            """,
-            (day, slot_id, teacher_id),
-        ).fetchall()
-    for r in rows:
-        if r["program"] == exclude_program and r["semester"] == exclude_semester:
-            continue
-        return dict(r)
-    return None
+    """Return dict keyed ``'day|slot_id'`` → row with subject + teacher info."""
+    pipeline = [
+        {"$match": {"program": program, "semester": semester}},
+        {
+            "$lookup": {
+                "from": "subjects",
+                "localField": "subject_id",
+                "foreignField": "id",
+                "as": "_subj",
+            }
+        },
+        {"$unwind": "$_subj"},
+        {
+            "$lookup": {
+                "from": "teachers",
+                "localField": "_subj.teacher_id",
+                "foreignField": "id",
+                "as": "_teacher",
+            }
+        },
+        {
+            "$addFields": {
+                "subject_name": "$_subj.name",
+                "subject_code": "$_subj.code",
+                "teacher_name": {
+                    "$ifNull": [
+                        {"$arrayElemAt": ["$_teacher.name", 0]},
+                        None,
+                    ]
+                },
+            }
+        },
+        {"$project": {"_id": 0, "_subj": 0, "_teacher": 0}},
+    ]
+    rows = list(_assignments.aggregate(pipeline))
+    return {f"{r['day']}|{r['slot_id']}": r for r in rows}
 
 
 def assign_slot(program, semester, day, slot_id, subject_id):
-    """Assigns a subject to a slot after validating teacher conflicts and credit cap.
-    Returns (ok: bool, message: str)."""
-    with get_conn() as conn:
-        subject = conn.execute("SELECT * FROM subjects WHERE id = ?", (subject_id,)).fetchone()
-        if subject is None:
-            return False, "Subject not found."
+    """Assign a subject to a slot after validating teacher conflicts and the
+    credit cap.  Returns ``(ok: bool, message: str)``."""
+    subject = _subjects.find_one({"id": subject_id}, {"_id": 0})
+    if subject is None:
+        return False, "Subject not found."
 
-        used = conn.execute(
-            "SELECT COUNT(*) AS c FROM assignments WHERE subject_id = ?", (subject_id,)
-        ).fetchone()["c"]
-        if used >= subject["credit"]:
-            return False, f"{subject['code']} already has all {subject['credit']} classes scheduled this week."
+    used = _assignments.count_documents({"subject_id": subject_id})
+    if used >= subject["credit"]:
+        return (
+            False,
+            f"{subject['code']} already has all {subject['credit']} classes scheduled this week.",
+        )
 
-        if subject["teacher_id"] is not None:
-            conflict_rows = conn.execute(
-                """
-                SELECT a.program, a.semester, s.code AS subject_code
-                FROM assignments a JOIN subjects s ON a.subject_id = s.id
-                WHERE a.day = ? AND a.slot_id = ? AND s.teacher_id = ?
-                """,
-                (day, slot_id, subject["teacher_id"]),
-            ).fetchall()
-            for r in conflict_rows:
-                if not (r["program"] == program and r["semester"] == semester):
-                    return False, (
-                        f"Teacher conflict: already assigned to {r['subject_code']} "
-                        f"({r['program']}, Sem {r['semester']}) at this time slot."
-                    )
+    # Teacher-conflict check across all programs / semesters.
+    if subject.get("teacher_id") is not None:
+        conflict_pipeline = [
+            {"$match": {"day": day, "slot_id": slot_id}},
+            {
+                "$lookup": {
+                    "from": "subjects",
+                    "localField": "subject_id",
+                    "foreignField": "id",
+                    "as": "_subj",
+                }
+            },
+            {"$unwind": "$_subj"},
+            {"$match": {"_subj.teacher_id": subject["teacher_id"]}},
+            {
+                "$project": {
+                    "_id": 0,
+                    "program": 1,
+                    "semester": 1,
+                    "subject_code": "$_subj.code",
+                }
+            },
+        ]
+        for r in _assignments.aggregate(conflict_pipeline):
+            if not (r["program"] == program and r["semester"] == semester):
+                return (
+                    False,
+                    f"Teacher conflict: already assigned to {r['subject_code']} "
+                    f"({r['program']}, Sem {r['semester']}) at this time slot.",
+                )
 
-        try:
-            conn.execute(
-                """INSERT INTO assignments (program, semester, day, slot_id, subject_id)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (program, semester, day, slot_id, subject_id),
-            )
-        except sqlite3.IntegrityError:
-            return False, "That slot is already filled."
-        return True, "Assigned."
+    try:
+        _assignments.insert_one(
+            {
+                "id": _next_id("assignments"),
+                "program": program,
+                "semester": semester,
+                "day": day,
+                "slot_id": slot_id,
+                "subject_id": subject_id,
+            }
+        )
+    except DuplicateKeyError:
+        return False, "That slot is already filled."
+    return True, "Assigned."
 
 
 def list_program_semesters():
-    """Distinct (program, semester) combos that have at least one subject defined."""
-    with get_conn() as conn:
-        rows = conn.execute(
-            "SELECT DISTINCT program, semester FROM subjects ORDER BY program, semester"
-        ).fetchall()
-    return [(r["program"], r["semester"]) for r in rows]
+    """Distinct (program, semester) combos that have at least one subject."""
+    pipeline = [
+        {
+            "$group": {
+                "_id": {"program": "$program", "semester": "$semester"}
+            }
+        },
+        {"$sort": {"_id.program": 1, "_id.semester": 1}},
+    ]
+    rows = list(_subjects.aggregate(pipeline))
+    return [(r["_id"]["program"], r["_id"]["semester"]) for r in rows]
 
 
 def clear_slot(program, semester, day, slot_id):
-    with get_conn() as conn:
-        conn.execute(
-            "DELETE FROM assignments WHERE program = ? AND semester = ? AND day = ? AND slot_id = ?",
-            (program, semester, day, slot_id),
-        )
+    _assignments.delete_one(
+        {
+            "program": program,
+            "semester": semester,
+            "day": day,
+            "slot_id": slot_id,
+        }
+    )

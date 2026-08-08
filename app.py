@@ -158,11 +158,33 @@ def page_subjects():
     if not subjects:
         st.info("No subjects yet for this program and semester — add one above.")
     else:
+        # Build teacher lookup once for all subject rows.
+        teacher_names_list = ["— none —"] + [t["name"] for t in teachers]
+        teacher_id_map = {"— none —": None}
+        teacher_id_map.update({t["name"]: t["id"] for t in teachers})
+
+        def _on_teacher_update(subject_id, tid_map, sel_key):
+            db.update_subject_teacher(subject_id, tid_map[st.session_state[sel_key]])
+
         for s in subjects:
             used = db.assigned_count(s["id"])
             c1, c2, c3, c4, c5 = st.columns([3, 2, 1, 2, 1])
             c1.write(f"**{s['code']}** — {s['name']}")
-            c2.write(s["teacher_name"] or "No teacher")
+
+            current_teacher = s.get("teacher_name") or "— none —"
+            if current_teacher not in teacher_names_list:
+                current_teacher = "— none —"
+            sel_key = f"teacher_sel_{s['id']}"
+            c2.selectbox(
+                "Teacher",
+                teacher_names_list,
+                index=teacher_names_list.index(current_teacher),
+                key=sel_key,
+                label_visibility="collapsed",
+                on_change=_on_teacher_update,
+                args=(s["id"], teacher_id_map, sel_key),
+            )
+
             c3.write(f"Cr {s['credit']}")
             c4.markdown(f"`{credit_bar(used, s['credit'])}`  {used}/{s['credit']} placed")
             if c5.button("Remove", key=f"del_subject_{s['id']}"):
