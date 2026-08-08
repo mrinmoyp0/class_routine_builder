@@ -72,13 +72,13 @@ def init_db():
     # Seed a default set of periods on first run only.
     if _time_slots.count_documents({}) == 0:
         defaults = [
-            (1, "Period 1", "09:00", "09:55", 0),
-            (2, "Period 2", "09:55", "10:50", 0),
-            (3, "Period 3", "10:50", "11:45", 0),
-            (4, "Lunch Break", "11:45", "12:30", 1),
-            (5, "Period 4", "12:30", "13:25", 0),
-            (6, "Period 5", "13:25", "14:20", 0),
-            (7, "Period 6", "14:20", "15:15", 0),
+            (1, "Period 1", "9:00 AM", "9:55 AM", 0),
+            (2, "Period 2", "9:55 AM", "10:50 AM", 0),
+            (3, "Period 3", "10:50 AM", "11:45 AM", 0),
+            (4, "Lunch Break", "11:45 AM", "12:30 PM", 1),
+            (5, "Period 4", "12:30 PM", "1:25 PM", 0),
+            (6, "Period 5", "1:25 PM", "2:20 PM", 0),
+            (7, "Period 6", "2:20 PM", "3:15 PM", 0),
         ]
         for order_index, label, start_time, end_time, is_break in defaults:
             _time_slots.insert_one(

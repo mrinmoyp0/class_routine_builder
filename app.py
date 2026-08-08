@@ -202,8 +202,8 @@ def page_time_slots():
     with st.form("add_slot_form", clear_on_submit=True):
         c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
         label = c1.text_input("Label", placeholder="e.g. Period 7")
-        start_time = c2.text_input("Start (HH:MM)", placeholder="15:15")
-        end_time = c3.text_input("End (HH:MM)", placeholder="16:10")
+        start_time = c2.text_input("Start", placeholder="3:15 PM")
+        end_time = c3.text_input("End", placeholder="4:10 PM")
         is_break = c4.checkbox("Break?")
         submitted = st.form_submit_button("Add period")
         if submitted:
