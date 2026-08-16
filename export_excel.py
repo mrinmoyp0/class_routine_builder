@@ -1,6 +1,8 @@
 """
 export_excel.py
 Builds a downloadable .xlsx workbook of the routine grid(s) using openpyxl.
+
+Layout matches the on-screen grid: days on rows, time slots on columns.
 Supports per-semester time slots, merged (multi-period) assignments, and
 break slots that may have assignments.
 """
@@ -30,10 +32,10 @@ def _sheet_name(program, semester):
 
 
 def _compute_merge_map(slots, assignments):
-    """Build a dict  ``'day|slot_id' -> span (int)``  for merged cells.
+    """Build horizontal merge map: ``'day|slot_id' -> span``
 
-    -  ``span > 1``  means the cell is the top of a vertically-merged group.
-    - ``span == -1`` means the cell is hidden (swallowed by the merge above).
+    - ``span > 1``: first cell of a horizontally-merged group.
+    - ``span == -1``: cell swallowed by the merge to its left.
     """
     merge_map = {}
     for day in db.DAYS:
@@ -61,7 +63,7 @@ def _compute_merge_map(slots, assignments):
 
 
 def build_workbook(program_semesters):
-    """program_semesters: list of (program, semester) tuples to include, one sheet each."""
+    """program_semesters: list of (program, semester) tuples, one sheet each."""
     wb = Workbook()
     wb.remove(wb.active)
 
@@ -74,89 +76,81 @@ def build_workbook(program_semesters):
         assignments = db.get_assignments(program, semester)
         merge_map = _compute_merge_map(slots, assignments)
 
-        # Title row
-        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(db.DAYS) + 1)
+        # Title row — spans day-label column + all slot columns.
+        total_cols = 1 + len(slots)
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=total_cols)
         title_cell = ws.cell(row=1, column=1, value=f"{program} — Semester {semester}")
         title_cell.font = Font(size=14, bold=True, color=INK)
         title_cell.alignment = Alignment(horizontal="center", vertical="center")
         ws.row_dimensions[1].height = 24
 
-        # Header row
+        # Header row: "Day" + one column per time slot.
         header_row = 2
-        ws.cell(row=header_row, column=1, value="Time").font = Font(bold=True, color="FFFFFF")
-        ws.cell(row=header_row, column=1).fill = PatternFill("solid", fgColor=INK)
-        ws.cell(row=header_row, column=1).alignment = Alignment(horizontal="center")
-        ws.cell(row=header_row, column=1).border = BORDER
+        day_hdr = ws.cell(row=header_row, column=1, value="Day")
+        day_hdr.font = Font(bold=True, color="FFFFFF")
+        day_hdr.fill = PatternFill("solid", fgColor=INK)
+        day_hdr.alignment = Alignment(horizontal="center")
+        day_hdr.border = BORDER
 
-        for ci, day in enumerate(db.DAYS, start=2):
-            c = ws.cell(row=header_row, column=ci, value=day)
-            c.font = Font(bold=True, color="FFFFFF")
+        for ci, slot in enumerate(slots, start=2):
+            slot_label = f"{slot['label']}\n{slot['start_time']}-{slot['end_time']}"
+            c = ws.cell(row=header_row, column=ci, value=slot_label)
+            c.font = Font(bold=True, color="FFFFFF", size=9)
             c.fill = PatternFill("solid", fgColor=INK)
-            c.alignment = Alignment(horizontal="center")
+            c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
             c.border = BORDER
+        ws.row_dimensions[header_row].height = 36
 
-        # Body rows
+        # Body rows: one row per day.
         r = header_row + 1
-        for slot in slots:
-            time_label = f"{slot['label']}\n{slot['start_time']}-{slot['end_time']}"
-            tc = ws.cell(row=r, column=1, value=time_label)
-            tc.font = Font(bold=True, color=INK, size=9)
-            tc.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-            tc.border = BORDER
-            tc.fill = PatternFill("solid", fgColor=CREAM)
+        for day in db.DAYS:
+            # Day label cell (row header).
+            dc = ws.cell(row=r, column=1, value=day)
+            dc.font = Font(bold=True, color=INK, size=10)
+            dc.alignment = Alignment(horizontal="center", vertical="center")
+            dc.border = BORDER
+            dc.fill = PatternFill("solid", fgColor=CREAM)
 
-            # A "pure break" row = break slot with NO assignments on any day.
-            is_pure_break = slot["is_break"] and all(
-                f"{day}|{slot['id']}" not in assignments for day in db.DAYS
-            )
+            for ci, slot in enumerate(slots, start=2):
+                key = f"{day}|{slot['id']}"
+                m = merge_map.get(key)
+                entry = assignments.get(key)
+                cell = ws.cell(row=r, column=ci)
+                cell.border = BORDER
+                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-            if is_pure_break:
-                ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=len(db.DAYS) + 1)
-                bc = ws.cell(row=r, column=2, value=slot["label"])
-                bc.font = Font(italic=True, color="6B6350")
-                bc.alignment = Alignment(horizontal="center", vertical="center")
-                bc.fill = PatternFill("solid", fgColor=BREAK_FILL)
-                bc.border = BORDER
-            else:
-                for ci, day in enumerate(db.DAYS, start=2):
-                    key = f"{day}|{slot['id']}"
-                    m = merge_map.get(key)
-                    entry = assignments.get(key)
-                    cell = ws.cell(row=r, column=ci)
-                    cell.border = BORDER
-                    cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                if m == -1:
+                    # Swallowed by a horizontal merge to its left.
+                    continue
 
-                    if m == -1:
-                        # Swallowed by a merge above — leave blank (openpyxl
-                        # already merged the cell range above).
-                        continue
+                if m and m > 1:
+                    ws.merge_cells(
+                        start_row=r, start_column=ci,
+                        end_row=r, end_column=ci + m - 1,
+                    )
 
-                    if m and m > 1:
-                        ws.merge_cells(
-                            start_row=r, start_column=ci,
-                            end_row=r + m - 1, end_column=ci,
-                        )
+                if entry:
+                    cell.value = (
+                        f"{entry['subject_code']}\n{entry['subject_name']}\n"
+                        f"{entry['teacher_name'] or ''}"
+                    )
+                    cell.font = Font(size=9, color=INK)
+                    cell.fill = PatternFill("solid", fgColor="EFEBDD")
+                elif slot["is_break"]:
+                    cell.value = slot["label"]
+                    cell.font = Font(italic=True, color="6B6350")
+                    cell.fill = PatternFill("solid", fgColor=BREAK_FILL)
+                else:
+                    cell.value = ""
 
-                    if entry:
-                        cell.value = (
-                            f"{entry['subject_code']}\n{entry['subject_name']}\n"
-                            f"{entry['teacher_name'] or ''}"
-                        )
-                        cell.font = Font(size=9, color=INK)
-                        cell.fill = PatternFill("solid", fgColor="EFEBDD")
-                    elif slot["is_break"]:
-                        cell.value = slot["label"]
-                        cell.font = Font(italic=True, color="6B6350")
-                        cell.fill = PatternFill("solid", fgColor=BREAK_FILL)
-                    else:
-                        cell.value = ""
             r += 1
 
-        ws.column_dimensions["A"].width = 18
-        for ci in range(2, len(db.DAYS) + 2):
-            ws.column_dimensions[get_column_letter(ci)].width = 20
+        # Column widths.
+        ws.column_dimensions["A"].width = 14
+        for ci in range(2, total_cols + 1):
+            ws.column_dimensions[get_column_letter(ci)].width = 16
         for row in ws.iter_rows(min_row=header_row + 1, max_row=r - 1):
-            ws.row_dimensions[row[0].row].height = 42
+            ws.row_dimensions[row[0].row].height = 50
         ws.freeze_panes = "B3"
 
     buf = io.BytesIO()
