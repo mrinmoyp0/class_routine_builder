@@ -32,34 +32,50 @@
     text-align: center;
     vertical-align: middle;
   }
+  /* Column headers (time slots) */
   th {
     background: var(--ink);
     color: var(--cream);
     font-weight: 600;
-    font-size: 12.5px;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    padding: 10px 4px;
-  }
-  th.time-header { background: var(--ink); }
-  td.slotlabel {
-    background: var(--paper);
-    font-family: "IBM Plex Mono", "Courier New", monospace;
-    font-weight: 600;
     font-size: 11px;
-    color: var(--ink-soft);
-    white-space: nowrap;
-    padding: 8px 6px;
-    min-width: 92px;
+    letter-spacing: 0.03em;
+    padding: 8px 4px;
+    min-width: 80px;
   }
-  td.slotlabel .time {
+  th.day-header {
+    background: var(--ink);
+    text-transform: uppercase;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    min-width: 100px;
+  }
+  th.slot-header {
+    background: var(--ink);
+    white-space: nowrap;
+  }
+  th.slot-header .slot-time {
     display: block;
     font-weight: 400;
-    color: #8a8368;
+    font-size: 9px;
+    opacity: 0.7;
     margin-top: 2px;
   }
-  td.break-label {
-    border-left: 3px solid var(--gold) !important;
+  th.slot-header-break {
+    background: #2D3A55;
+    border-bottom: 2px solid var(--gold);
+  }
+  /* Row headers (days) */
+  td.daylabel {
+    background: var(--paper);
+    font-family: "IBM Plex Sans", sans-serif;
+    font-weight: 600;
+    font-size: 12px;
+    color: var(--ink);
+    white-space: nowrap;
+    padding: 10px 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    min-width: 100px;
   }
   .cell-empty {
     cursor: pointer;
@@ -154,9 +170,9 @@ function setComponentValue(value) {
   postToStreamlit("streamlit:setComponentValue", { value: value });
 }
 
-/* ── Merge detection ── */
+/* ── Merge detection (horizontal: same subject in consecutive slots on same day) ── */
 function computeMerges(days, slots, assignments) {
-  const spanMap = {};   // key -> N  (first cell of a group, N >= 2)
+  const spanMap = {};   // key -> N  (first cell of a horizontal group, N >= 2)
   const skipSet = {};   // key -> true  (swallowed cells)
   for (const day of days) {
     let i = 0;
@@ -193,18 +209,18 @@ function maxEmptySpan(day, slotIdx, slots, assignments) {
 }
 
 /* ── Cell component ── */
-function Cell({ day, slot, entry, subjects, isOpen, onOpen, onClose, onAssign, onClear, rowSpan, isBreak, maxSpan }) {
+function Cell({ day, slot, entry, subjects, isOpen, onOpen, onClose, onAssign, onClear, colSpan, isBreak, maxSpan }) {
   /* Filled */
   if (entry) {
-    const rs = rowSpan || 1;
+    const cs = colSpan || 1;
     return html`
-      <td rowSpan=${rs}>
+      <td colSpan=${cs}>
         <div class="cell-filled">
-          <span class="clear-btn" title="Remove" onClick=${() => onClear(day, slot.id, rs)}>×</span>
+          <span class="clear-btn" title="Remove" onClick=${() => onClear(day, slot.id, cs)}>×</span>
           <div class="subj-code">${entry.subject_code}</div>
           <div class="subj-name">${entry.subject_name}</div>
           <div class="subj-teacher">${entry.teacher_name || "No teacher assigned"}</div>
-          ${rs > 1 ? html`<div class="span-badge">${rs} periods</div>` : null}
+          ${cs > 1 ? html`<div class="span-badge">${cs} periods</div>` : null}
         </div>
       </td>
     `;
@@ -265,7 +281,7 @@ function Cell({ day, slot, entry, subjects, isOpen, onOpen, onClose, onAssign, o
   `;
 }
 
-/* ── App ── */
+/* ── App (transposed: days = rows, slots = columns) ── */
 function App({ args }) {
   const { days = [], slots = [], assignments = {}, subjects = [] } = args || {};
   const [openCell, setOpenCell] = React.useState(null);
@@ -290,19 +306,23 @@ function App({ args }) {
     <table>
       <thead>
         <tr>
-          <th class="time-header">Time</th>
-          ${days.map((d) => html`<th key=${d}>${d}</th>`)}
+          <th class="day-header">Day</th>
+          ${slots.map((slot) => html`
+            <th key=${slot.id} class=${`slot-header${slot.is_break ? ' slot-header-break' : ''}`}>
+              ${slot.label}<span class="slot-time">${slot.start_time}–${slot.end_time}</span>
+            </th>
+          `)}
         </tr>
       </thead>
       <tbody>
-        ${slots.map((slot, si) => html`
-          <tr key=${slot.id}>
-            <td class=${`slotlabel${slot.is_break ? ' break-label' : ''}`}>${slot.label}<span class="time">${slot.start_time}–${slot.end_time}</span></td>
-            ${days.map((day) => {
+        ${days.map((day) => html`
+          <tr key=${day}>
+            <td class="daylabel">${day}</td>
+            ${slots.map((slot, si) => {
               const key = day + "|" + slot.id;
               if (skipSet[key]) return null;
               const entry = assignments[key];
-              const rs = spanMap[key];
+              const cs = spanMap[key];
               const ms = maxEmptySpan(day, si, slots, assignments);
               return html`<${Cell}
                 key=${key}
@@ -315,7 +335,7 @@ function App({ args }) {
                 onClose=${() => setOpenCell(null)}
                 onAssign=${handleAssign}
                 onClear=${handleClear}
-                rowSpan=${rs}
+                colSpan=${cs}
                 isBreak=${slot.is_break}
                 maxSpan=${ms}
               />`;
