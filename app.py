@@ -64,32 +64,44 @@ st.markdown(
         padding-left: 10px;
     }
 
-    /* Loading overlay — appears while Streamlit is processing */
-    @keyframes ledger-spin {
-        to { transform: rotate(360deg); }
+    /* Loading overlay — typewriter style (Spasoje Perovic inspired) */
+    @keyframes typewriter-cursor {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0; }
+    }
+    @keyframes typewriter-appear {
+        0%   { max-width: 0; }
+        100% { max-width: 20ch; }
     }
     .stApp:has([data-testid="stStatusWidget"])::after {
         content: "";
         position: fixed;
         inset: 0;
-        background: rgba(250, 247, 240, 0.55);
-        backdrop-filter: blur(1.5px);
+        background: rgba(31, 42, 68, 0.88);
+        backdrop-filter: blur(3px);
         z-index: 9999;
         pointer-events: all;
     }
     .stApp:has([data-testid="stStatusWidget"])::before {
-        content: "";
+        content: "Loading...";
         position: fixed;
         top: 50%;
         left: 50%;
-        width: 36px;
-        height: 36px;
-        margin: -18px 0 0 -18px;
-        border: 3px solid #D9D2BE;
-        border-top-color: #B8863B;
-        border-radius: 50%;
-        animation: ledger-spin 0.7s linear infinite;
+        transform: translate(-50%, -50%);
+        font-family: "IBM Plex Mono", "Courier New", monospace;
+        font-size: 20px;
+        font-weight: 400;
+        letter-spacing: 0.15em;
+        color: #FAF7F0;
         z-index: 10000;
+        white-space: nowrap;
+        overflow: hidden;
+        max-width: 0;
+        border-right: 2px solid #B8863B;
+        padding-right: 4px;
+        animation:
+            typewriter-appear 1.2s steps(10, end) forwards,
+            typewriter-cursor 0.6s step-end infinite;
     }
     </style>
     """,
