@@ -63,6 +63,34 @@ st.markdown(
         border-left: 3px solid #D9D2BE;
         padding-left: 10px;
     }
+
+    /* Loading overlay — appears while Streamlit is processing */
+    @keyframes ledger-spin {
+        to { transform: rotate(360deg); }
+    }
+    .stApp:has([data-testid="stStatusWidget"])::after {
+        content: "";
+        position: fixed;
+        inset: 0;
+        background: rgba(250, 247, 240, 0.55);
+        backdrop-filter: blur(1.5px);
+        z-index: 9999;
+        pointer-events: all;
+    }
+    .stApp:has([data-testid="stStatusWidget"])::before {
+        content: "";
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        width: 36px;
+        height: 36px;
+        margin: -18px 0 0 -18px;
+        border: 3px solid #D9D2BE;
+        border-top-color: #B8863B;
+        border-radius: 50%;
+        animation: ledger-spin 0.7s linear infinite;
+        z-index: 10000;
+    }
     </style>
     """,
     unsafe_allow_html=True,
