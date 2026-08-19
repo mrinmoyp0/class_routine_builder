@@ -466,3 +466,8 @@ def list_program_semesters():
     ]
     rows = list(_subjects.aggregate(pipeline))
     return [(r["_id"]["program"], r["_id"]["semester"]) for r in rows]
+
+
+def clear_all_assignments(program, semester):
+    """Remove every assignment for *program*+*semester*."""
+    _assignments.delete_many({"program": program, "semester": semester})

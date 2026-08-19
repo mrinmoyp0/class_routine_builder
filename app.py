@@ -294,7 +294,24 @@ def page_build_routine():
 
     assignments_payload = db.get_assignments(program, semester)
 
-    st.markdown('<p class="ledger-note">Click an empty cell to assign a subject (pick multiple periods to merge). Click × to clear. Break slots are assignable too.</p>', unsafe_allow_html=True)
+    col_note, col_btn = st.columns([4, 1])
+    col_note.markdown('<p class="ledger-note">Click an empty cell to assign a subject (pick multiple periods to merge). Click × to clear. Break slots are assignable too.</p>', unsafe_allow_html=True)
+    if assignments_payload:
+        if col_btn.button("🗑️ Clear Entire Routine", key=f"clear_all_{program}_{semester}"):
+            st.session_state[f"confirm_clear_all_{program}_{semester}"] = True
+
+    confirm_key = f"confirm_clear_all_{program}_{semester}"
+    if st.session_state.get(confirm_key):
+        st.warning("⚠️ This will remove **all** assignments for this routine. Are you sure?")
+        c_yes, c_no, _ = st.columns([1, 1, 6])
+        if c_yes.button("Yes, clear all", key=f"confirm_yes_{program}_{semester}"):
+            db.clear_all_assignments(program, semester)
+            st.session_state.pop(confirm_key, None)
+            st.session_state[msg_key] = ("success", "Entire routine cleared.")
+            st.rerun()
+        if c_no.button("Cancel", key=f"confirm_no_{program}_{semester}"):
+            st.session_state.pop(confirm_key, None)
+            st.rerun()
 
     action = routine_grid(
         days=db.DAYS,
