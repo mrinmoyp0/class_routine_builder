@@ -245,6 +245,34 @@ def page_time_slots():
 
     db.seed_default_slots(program, semester)
 
+    # Class duration selector
+    st.markdown("---")
+    dur_col1, dur_col2, dur_col3 = st.columns([2, 1, 3])
+    duration = dur_col1.selectbox(
+        "Class Duration",
+        options=[30, 40, 50],
+        index=2,
+        format_func=lambda x: f"{x} minutes",
+        key=f"dur_{program}_{semester}",
+    )
+    if dur_col2.button("Apply", key=f"apply_dur_{program}_{semester}"):
+        st.session_state[f"confirm_regen_{program}_{semester}"] = duration
+
+    regen_key = f"confirm_regen_{program}_{semester}"
+    if st.session_state.get(regen_key):
+        chosen = st.session_state[regen_key]
+        st.warning(f"⚠️ This will rebuild **all** time slots to **{chosen} min** classes and **clear all assignments** for this routine. Continue?")
+        cy, cn, _ = st.columns([1, 1, 6])
+        if cy.button("Yes, rebuild", key=f"regen_yes_{program}_{semester}"):
+            db.regenerate_slots(program, semester, chosen)
+            st.session_state.pop(regen_key, None)
+            st.success(f"Rebuilt with {chosen}-minute classes.")
+            st.rerun()
+        if cn.button("Cancel", key=f"regen_no_{program}_{semester}"):
+            st.session_state.pop(regen_key, None)
+            st.rerun()
+    st.markdown("---")
+
     with st.form("add_slot_form", clear_on_submit=True):
         c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
         label = c1.text_input("Label", placeholder="e.g. Period 9")

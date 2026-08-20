@@ -63,6 +63,17 @@ def _parse_time_to_minutes(time_str):
     return hours * 60 + minutes
 
 
+def _minutes_to_time_str(total_minutes):
+    """Convert minutes from midnight to '9:00 AM' style string."""
+    h = total_minutes // 60
+    m = total_minutes % 60
+    period = "AM" if h < 12 else "PM"
+    display_h = h % 12
+    if display_h == 0:
+        display_h = 12
+    return f"{display_h}:{m:02d} {period}"
+
+
 # ---------------------------------------------------------------------------
 # Initialisation
 # ---------------------------------------------------------------------------
@@ -124,6 +135,64 @@ def seed_default_slots(program, semester):
                 "is_break": is_break,
                 "start_minutes": _parse_time_to_minutes(start),
                 "end_minutes": _parse_time_to_minutes(end),
+            }
+        )
+
+
+def regenerate_slots(program, semester, class_duration):
+    """Delete all slots + assignments for *program*+*semester* and rebuild
+    with *class_duration* minute periods.
+
+    Fixed parameters:
+      - Day starts at 9:00 AM (540 min)
+      - Lunch: 1:10 PM – 2:00 PM (790 – 840 min)
+      - Day ends at latest 4:30 PM (990 min)
+    """
+    _time_slots.delete_many({"program": program, "semester": semester})
+    _assignments.delete_many({"program": program, "semester": semester})
+
+    start_of_day = 540     # 9:00 AM
+    lunch_start = 790      # 1:10 PM
+    lunch_end = 840        # 2:00 PM
+    end_of_day = 990       # 4:30 PM
+
+    slots = []
+    period_num = 1
+    order = 1
+
+    # Morning periods
+    t = start_of_day
+    while t + class_duration <= lunch_start:
+        slots.append((order, f"Period {period_num}", t, t + class_duration, 0))
+        t += class_duration
+        period_num += 1
+        order += 1
+
+    # Lunch break
+    slots.append((order, "Lunch Break", lunch_start, lunch_end, 1))
+    order += 1
+
+    # Afternoon periods
+    t = lunch_end
+    while t + class_duration <= end_of_day:
+        slots.append((order, f"Period {period_num}", t, t + class_duration, 0))
+        t += class_duration
+        period_num += 1
+        order += 1
+
+    for o, label, s_min, e_min, is_brk in slots:
+        _time_slots.insert_one(
+            {
+                "id": _next_id("time_slots"),
+                "program": program,
+                "semester": semester,
+                "order_index": o,
+                "label": label,
+                "start_time": _minutes_to_time_str(s_min),
+                "end_time": _minutes_to_time_str(e_min),
+                "is_break": is_brk,
+                "start_minutes": s_min,
+                "end_minutes": e_min,
             }
         )
 
