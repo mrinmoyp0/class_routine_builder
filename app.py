@@ -10,7 +10,7 @@ import database as db
 from export_excel import build_workbook
 from components.routine_grid import routine_grid
 
-st.set_page_config(page_title="Class Routine Builder", page_icon="📖", layout="wide")
+st.set_page_config(page_title="Class Routine Builder", page_icon="📖", layout="wide", initial_sidebar_state="collapsed")
 db.init_db()
 
 # ---------------------------------------------------------------------------
