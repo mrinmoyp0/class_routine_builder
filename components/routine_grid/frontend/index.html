@@ -255,7 +255,7 @@ function Cell({ day, slot, entry, subjects, isOpen, onOpen, onClose, onAssign, o
           >
             <option value="">— choose subject —</option>
             ${subjects.map(
-              (s) => html`<option key=${s.id} value=${s.id}>${s.code} · ${s.assigned_count}/${s.credit} used</option>`
+              (s) => html`<option key=${s.id} value=${s.id}>${s.code} - ${s.name} (${s.assigned_count}/${s.credit} used)</option>`
             )}
           </select>
           <div class="cancel-link" onClick=${(ev) => { ev.stopPropagation(); onClose(); }}>cancel</div>
